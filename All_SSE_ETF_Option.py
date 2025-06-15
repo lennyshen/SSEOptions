@@ -442,7 +442,9 @@ def get_and_display_data():
         st.warning("未能计算出任何有效的贴水数据")
     
     # 更新最后刷新时间
-    last_update.text(f"最后更新时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    beijing_tz = datetime.timezone(datetime.timedelta(hours=8))
+    beijing_time = datetime.datetime.now(beijing_tz)
+    last_update.text(f"最后更新时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
 
     # 将结果存储到全局变量中
     st.session_state.latest_premium_data = premium_df
