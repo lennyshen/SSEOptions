@@ -3,6 +3,9 @@ import pandas as pd
 import akshare as ak
 import datetime
 import time
+import requests
+import base64
+import os
 from dateutil.relativedelta import relativedelta
 
 # 页面配置
@@ -12,13 +15,44 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# GitHub配置
+GITHUB_OWNER = "lennyshen"
+GITHUB_REPO = "SSEOptions"
+GITHUB_FILE_PATH = "All_SSE_ETF_Option_Premium_Log.csv"
+GITHUB_TOKEN = st.secrets["GT"]
+
 # 全局变量存储最新的计算结果
 if 'latest_premium_data' not in st.session_state:
     st.session_state.latest_premium_data = None
 
-# 保存数据到CSV的函数
-def save_data_to_csv():
-    """保存当前数据到CSV文件"""
+# 从GitHub读取数据的函数
+def read_data_from_github():
+    """从GitHub仓库读取CSV数据"""
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            # 文件存在，获取内容
+            file_info = response.json()
+            content = base64.b64decode(file_info['content']).decode('utf-8-sig')
+            
+            # 从字符串创建DataFrame
+            from io import StringIO
+            df = pd.read_csv(StringIO(content))
+            return df, file_info['sha']
+        else:
+            # 文件不存在，返回空的DataFrame
+            return pd.DataFrame(), None
+            
+    except Exception as e:
+        st.error(f"从GitHub读取数据时出错: {str(e)}")
+        return pd.DataFrame(), None
+
+# 保存数据到GitHub的函数
+def save_data_to_github():
+    """保存当前数据到GitHub仓库"""
     if st.session_state.latest_premium_data is None or st.session_state.latest_premium_data.empty:
         st.error("没有可保存的数据，请先运行数据获取")
         return False
@@ -26,6 +60,16 @@ def save_data_to_csv():
     try:
         # 准备要保存的数据
         data_to_save = st.session_state.latest_premium_data.copy()
+        
+        # 对数值列进行4位小数格式化
+        if '贴水价值' in data_to_save.columns:
+            data_to_save['贴水价值'] = data_to_save['贴水价值'].round(4)
+        if '年化贴水率' in data_to_save.columns:
+            data_to_save['年化贴水率'] = data_to_save['年化贴水率'].round(4)
+        if '行权价' in data_to_save.columns:
+            data_to_save['行权价'] = data_to_save['行权价'].round(4)
+        if '剩余天数' in data_to_save.columns:
+            data_to_save['剩余天数'] = data_to_save['剩余天数'].astype(int)  # 只保留整数部分
         
         # 添加当前日期列
         current_date = datetime.date.today().strftime('%Y-%m-%d')
@@ -47,27 +91,48 @@ def save_data_to_csv():
         # 替换ETF类型名称为简化版本
         data_to_save['ETF类型'] = data_to_save['ETF类型'].map(etf_display_names)
         
-        filename = "All_SSE_ETF_Option_Premium_Log.csv"
+        # 从GitHub读取现有数据
+        existing_data, sha = read_data_from_github()
         
-        # 检查文件是否存在
-        try:
-            existing_data = pd.read_csv(filename)
+        if not existing_data.empty:
             # 删除同日期的记录
             existing_data = existing_data[existing_data['记录日期'] != current_date]
             # 合并数据
             final_data = pd.concat([existing_data, data_to_save], ignore_index=True)
-        except FileNotFoundError:
-            # 文件不存在，创建新文件
+        else:
+            # 没有现有数据，使用新数据
             final_data = data_to_save
         
         # 按日期排序
         final_data = final_data.sort_values('记录日期', ascending=False)
         
-        # 保存到CSV
-        final_data.to_csv(filename, index=False, encoding='utf-8-sig')
+        # 将DataFrame转换为CSV字符串
+        csv_content = final_data.to_csv(index=False, encoding='utf-8-sig')
         
-        st.success(f"✅ 数据已保存到 {filename}，共 {len(data_to_save)} 条记录")
-        return True
+        # 编码内容
+        encoded_content = base64.b64encode(csv_content.encode('utf-8-sig')).decode()
+        
+        # 准备提交数据
+        payload = {
+            "message": f"Update {GITHUB_FILE_PATH} via API - {current_date}",
+            "content": encoded_content
+        }
+        
+        # 如果文件已存在，添加sha
+        if sha:
+            payload["sha"] = sha
+        
+        # 提交到GitHub
+        url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        response = requests.put(url, json=payload, headers=headers)
+        
+        if response.status_code in [200, 201]:
+            st.success(f"✅ 数据已保存到GitHub仓库，共 {len(data_to_save)} 条记录")
+            return True
+        else:
+            st.error(f"保存到GitHub失败: {response.status_code} - {response.json()}")
+            return False
         
     except Exception as e:
         st.error(f"保存数据时出错: {str(e)}")
@@ -77,12 +142,13 @@ def save_data_to_csv():
 st.title("All SSE ETF Options Premium Dashboard")
 st.markdown("""
 本仪表板展示全部上交所ETF期权的贴水分析数据，每5分钟自动刷新一次。
+数据将保存到GitHub仓库中。
 """)
 
 # 顶部控制栏 - 包含保存按钮和刷新控制
 col1, col2, col3 = st.columns([1.5, 2, 2.5])
 with col1:
-    save_button = st.button("💾 保存当前数据", help="将当前数据保存到CSV文件")
+    save_button = st.button("💾 保存当前数据到GitHub", help="将当前数据保存到GitHub仓库")
 with col2:
     refresh_button = st.button("🔄 手动刷新数据")
 with col3:
@@ -198,7 +264,7 @@ def get_real_time_option_price(security_id, option_type):
                 # 如果买价不可用，尝试最新价
                 price = float(option_data[option_data['字段'] == '最新价']['值'].iloc[0])
             
-        return price if price > 0 else None
+        return round(price, 4) if price > 0 else None  # 保留4位小数
         
     except Exception as e:
         return None
@@ -253,7 +319,7 @@ def get_real_time_etf_prices():
         try:
             spot_price_df = ak.option_sse_underlying_spot_price_sina(symbol=symbol)
             current_price = float(spot_price_df.loc[spot_price_df['字段'] == '最近成交价', '值'].iloc[0])
-            etf_prices[symbol] = current_price
+            etf_prices[symbol] = round(current_price, 4)  # 保留4位小数
         except Exception as e:
             st.warning(f"获取 {config['name']} 价格失败: {str(e)}")
             etf_prices[symbol] = 0.0  # 设置默认值
@@ -378,9 +444,9 @@ def get_and_display_data():
             days_to_maturity = (expiry_date - datetime.date.today()).days
             
             return pd.Series({
-                '贴水价值': premium_value,
-                '年化贴水率': (premium_value / etf_price) * (365 / max(days_to_maturity, 1)),  # 避免除以0
-                '剩余天数': days_to_maturity
+                '贴水价值': round(premium_value, 4),
+                '年化贴水率': round((premium_value / etf_price) * (365 / max(days_to_maturity, 1)), 4),  # 避免除以0
+                '剩余天数': int(days_to_maturity)  # 只保留整数部分
             })
     
     # 计算贴水
@@ -423,8 +489,15 @@ def get_and_display_data():
                 display_df = group.copy()
                 # 将年化贴水率转换为百分比格式前先排序
                 display_df = display_df.sort_values('年化贴水率', ascending=True)
-                # 将年化贴水率转换为百分比格式
-                display_df['年化贴水率'] = (display_df['年化贴水率'] * 100).round(2).astype(str) + '%'
+                # 将年化贴水率转换为百分比格式，保留4位小数
+                display_df['年化贴水率'] = (display_df['年化贴水率'] * 100).round(4).astype(str) + '%'
+                # 对其他数值列进行4位小数格式化
+                if '贴水价值' in display_df.columns:
+                    display_df['贴水价值'] = display_df['贴水价值'].round(4)
+                if '行权价' in display_df.columns:
+                    display_df['行权价'] = display_df['行权价'].round(4)
+                if '剩余天数' in display_df.columns:
+                    display_df['剩余天数'] = display_df['剩余天数'].astype(int)  # 只保留整数部分
                 # 设置紧凑布局
                 st.dataframe(
                     display_df[['行权价', '贴水价值', '年化贴水率', '剩余天数']],
@@ -432,10 +505,10 @@ def get_and_display_data():
                     height=300,  # 调整高度适应更多数据
                     hide_index=True,  # 隐藏索引
                     column_config={
-                        "行权价": st.column_config.NumberColumn(width="small"),
-                        "贴水价值": st.column_config.NumberColumn(width="small"),
+                        "行权价": st.column_config.NumberColumn(width="small", format="%.4f"),
+                        "贴水价值": st.column_config.NumberColumn(width="small", format="%.4f"),
                         "年化贴水率": st.column_config.TextColumn(width="small"),
-                        "剩余天数": st.column_config.NumberColumn(width="small")
+                        "剩余天数": st.column_config.NumberColumn(width="small", format="%d")  # 整数格式
                     }
                 )
     else:
@@ -451,7 +524,7 @@ def get_and_display_data():
 
 # 处理保存按钮点击
 if save_button:
-    save_data_to_csv()
+    save_data_to_github()
 
 # 主要的数据显示逻辑
 # 初始化会话状态
