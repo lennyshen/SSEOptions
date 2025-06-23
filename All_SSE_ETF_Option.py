@@ -328,199 +328,238 @@ def get_real_time_etf_prices():
 
 # 主数据获取和展示函数
 def get_and_display_data():
-    # 获取期权代码映射关系（缓存1小时）
-    option_mapping = get_option_code_mapping()
+    # 创建进度条
+    progress_bar = st.progress(0)
+    progress_text = st.empty()
     
-    # 获取基础期权数据（缓存1小时）
-    option_finance_board_df = get_basic_option_data()
+    # 更新进度函数
+    def update_progress(progress, text):
+        progress_bar.progress(progress / 100)
+        progress_text.text(f"🔄 {text} ({progress}%)")
     
-    if option_finance_board_df.empty:
-        st.error("未能获取任何有效的期权数据")
-        return
-    
-    # 获取实时ETF价格（不缓存，每次都获取最新价格）
-    with st.spinner("🔄 正在获取实时数据..."):
+    try:
+        # 步骤1: 获取期权代码映射关系（缓存1小时）- 10%
+        update_progress(5, "正在获取期权代码映射关系...")
+        option_mapping = get_option_code_mapping()
+        update_progress(10, "期权代码映射关系获取完成")
+        
+        # 步骤2: 获取基础期权数据（缓存1小时）- 30%
+        update_progress(15, "正在获取基础期权数据...")
+        option_finance_board_df = get_basic_option_data()
+        update_progress(30, "基础期权数据获取完成")
+        
+        if option_finance_board_df.empty:
+            st.error("未能获取任何有效的期权数据")
+            update_progress(100, "数据获取失败")
+            return
+        
+        # 步骤3: 获取实时ETF价格 - 50%
+        update_progress(35, "正在获取实时ETF价格...")
         etf_config, etf_prices = get_real_time_etf_prices()
-    
-    # 显示ETF价格（多列布局）
-    price_cols = st.columns(len(etf_config))
-    for i, (symbol, config) in enumerate(etf_config.items()):
-        with price_cols[i]:
-            price = etf_prices.get(symbol, 0.0)
-            if price > 0:
-                st.metric(f"{config['name']}价格", f"{price:.4f}")
-            else:
-                st.metric(f"{config['name']}价格", "获取失败", delta="❌")
-    
-    # 统计实时价格获取情况
-    real_time_count = {'call_success': 0, 'put_success': 0, 'call_total': 0, 'put_total': 0}
-    
-    # 改进的ETF类型识别函数
-    def get_etf_price(etf_type_name):
-        """根据ETF类型名称获取对应的ETF价格"""
-        # 创建所有可能的匹配项，按关键词长度降序排列
-        matches = []
-        for symbol, config in etf_config.items():
-            for keyword in config['keywords']:
-                if keyword in etf_type_name:
-                    matches.append((len(keyword), symbol, keyword))
+        update_progress(50, "实时ETF价格获取完成")
         
-        # 按关键词长度降序排序，优先匹配更具体的关键词
-        matches.sort(reverse=True)
+        # 显示ETF价格（多列布局）
+        price_cols = st.columns(len(etf_config))
+        for i, (symbol, config) in enumerate(etf_config.items()):
+            with price_cols[i]:
+                price = etf_prices.get(symbol, 0.0)
+                if price > 0:
+                    st.metric(f"{config['name']}价格", f"{price:.4f}")
+                else:
+                    st.metric(f"{config['name']}价格", "获取失败", delta="❌")
         
-        if matches:
-            return etf_prices.get(matches[0][1], 0.0)
+        # 统计实时价格获取情况
+        real_time_count = {'call_success': 0, 'put_success': 0, 'call_total': 0, 'put_total': 0}
         
-        # 默认返回300ETF价格
-        return etf_prices.get("sh510300", 0.0)
-    
-    # 计算贴水
-    def calculate_premium(group):
-        calls = group[group['合约交易代码'].str.contains('C')]
-        puts = group[group['合约交易代码'].str.contains('P')]
+        # 改进的ETF类型识别函数
+        def get_etf_price(etf_type_name):
+            """根据ETF类型名称获取对应的ETF价格"""
+            # 创建所有可能的匹配项，按关键词长度降序排列
+            matches = []
+            for symbol, config in etf_config.items():
+                for keyword in config['keywords']:
+                    if keyword in etf_type_name:
+                        matches.append((len(keyword), symbol, keyword))
+            
+            # 按关键词长度降序排序，优先匹配更具体的关键词
+            matches.sort(reverse=True)
+            
+            if matches:
+                return etf_prices.get(matches[0][1], 0.0)
+            
+            # 默认返回300ETF价格
+            return etf_prices.get("sh510300", 0.0)
         
-        if len(calls) > 0 and len(puts) > 0:
-            real_time_count['call_total'] += 1
-            real_time_count['put_total'] += 1
+        # 步骤4: 开始计算贴水 - 60%
+        update_progress(55, "正在计算期权贴水...")
+        
+        # 计算贴水
+        def calculate_premium(group):
+            calls = group[group['合约交易代码'].str.contains('C')]
+            puts = group[group['合约交易代码'].str.contains('P')]
             
-            # 获取Call期权实时价格（使用卖价）
-            call_contract_code = calls.iloc[0]['合约交易代码']
-            call_strike = calls.iloc[0]['行权价']
-            
-            # 直接使用合约交易代码作为CONTRACT_ID在映射中查找
-            call_security_id = None
-            if call_contract_code in option_mapping:
-                call_security_id = option_mapping[call_contract_code]['security_id']
-            
-            # 获取Put期权实时价格（使用买价）
-            put_contract_code = puts.iloc[0]['合约交易代码']
-            put_strike = puts.iloc[0]['行权价']
-            
-            # 直接使用合约交易代码作为CONTRACT_ID在映射中查找
-            put_security_id = None
-            if put_contract_code in option_mapping:
-                put_security_id = option_mapping[put_contract_code]['security_id']
-            
-            # 获取实时价格
-            if call_security_id:
-                call_price = get_real_time_option_price(call_security_id, 'C')
-                if call_price is not None:
-                    real_time_count['call_success'] += 1
-            else:
-                call_price = calls.iloc[0]['当前价']  # fallback到原有数据
-            
-            if put_security_id:
-                put_price = get_real_time_option_price(put_security_id, 'P')
-                if put_price is not None:
-                    real_time_count['put_success'] += 1
-            else:
-                put_price = puts.iloc[0]['当前价']  # fallback到原有数据
-            
-            # 如果无法获取实时价格，使用原有数据
-            if call_price is None:
-                call_price = calls.iloc[0]['当前价']
-            if put_price is None:
-                put_price = puts.iloc[0]['当前价']
-            
-            strike = calls.iloc[0]['行权价']
-            
-            # 使用改进的ETF价格获取函数
-            etf_price = get_etf_price(group.name[0])
-            if etf_price <= 0:
-                return None  # 如果ETF价格获取失败，跳过计算
+            if len(calls) > 0 and len(puts) > 0:
+                real_time_count['call_total'] += 1
+                real_time_count['put_total'] += 1
                 
-            synthetic_price = call_price - put_price + strike
-            premium_value = synthetic_price - etf_price
-            
-            # 精确计算剩余天数（每月第4个星期三到期）
-            expiry_date_str = calls.iloc[0]['合约交易代码'][7:11]  # 格式如"2506"
-            year = 2000 + int(expiry_date_str[:2])  # 前两位是年份
-            month = int(expiry_date_str[2:4])       # 后两位是月份
-            first_day = datetime.date(year, month, 1)
-            # 计算第一个星期三
-            first_wednesday = first_day + datetime.timedelta(days=(2 - first_day.weekday()) % 7)
-            # 第四个星期三 = 第一个星期三 + 3周
-            expiry_date = first_wednesday + datetime.timedelta(weeks=3)
-            days_to_maturity = (expiry_date - datetime.date.today()).days
-            
-            return pd.Series({
-                '贴水价值': round(premium_value, 4),
-                '年化贴水率': round((premium_value / etf_price) * (365 / max(days_to_maturity, 1)), 4),  # 避免除以0
-                '剩余天数': int(days_to_maturity)  # 只保留整数部分
-            })
-    
-    # 计算贴水
-    premium_df = option_finance_board_df.groupby(['ETF类型', '合约月份', '行权价']).apply(calculate_premium).reset_index()
-    
-    # 确保合约月份列存在后再进行后续操作
-    if '合约月份' not in option_finance_board_df.columns:
-        st.error("无法从合约交易代码中提取月份信息")
-        return
-    
-    # 移除空值行
-    premium_df = premium_df.dropna()
-    
-    # 改进的ETF类型名称显示
-    etf_display_names = {
-        "华泰柏瑞沪深300ETF期权": "300ETF",
-        "南方中证500ETF期权": "500ETF", 
-        "华夏上证50ETF期权": "50ETF",
-        "华夏科创50ETF期权": "科创50ETF",
-        "易方达科创50ETF期权": "科创板50ETF"
-    }
-    
-    # 显示数据 - 使用更灵活的列布局
-    if not premium_df.empty:
-        # 计算需要的列数
-        unique_combinations = premium_df.groupby(['ETF类型', '合约月份']).size()
-        num_combinations = len(unique_combinations)
-        
-        # 动态调整列数，最多4列
-        num_cols = min(4, num_combinations)
-        cols = st.columns(num_cols)
-        
-        for i, ((etf_type, month), group) in enumerate(premium_df.groupby(['ETF类型', '合约月份'])):
-            with cols[i % num_cols]:  # 循环使用列
-                # 替换ETF类型名称
-                display_name = etf_display_names.get(etf_type, etf_type)
-                st.subheader(f"{display_name} - {month}月合约")
+                # 获取Call期权实时价格（使用卖价）
+                call_contract_code = calls.iloc[0]['合约交易代码']
+                call_strike = calls.iloc[0]['行权价']
                 
-                # 复制一份数据避免修改原始数据
-                display_df = group.copy()
-                # 将年化贴水率转换为百分比格式前先排序
-                display_df = display_df.sort_values('年化贴水率', ascending=True)
-                # 将年化贴水率转换为百分比格式，保留4位小数
-                display_df['年化贴水率'] = (display_df['年化贴水率'] * 100).round(4).astype(str) + '%'
-                # 对其他数值列进行4位小数格式化
-                if '贴水价值' in display_df.columns:
-                    display_df['贴水价值'] = display_df['贴水价值'].round(4)
-                if '行权价' in display_df.columns:
-                    display_df['行权价'] = display_df['行权价'].round(4)
-                if '剩余天数' in display_df.columns:
-                    display_df['剩余天数'] = display_df['剩余天数'].astype(int)  # 只保留整数部分
-                # 设置紧凑布局
-                st.dataframe(
-                    display_df[['行权价', '贴水价值', '年化贴水率', '剩余天数']],
-                    use_container_width=True,
-                    height=300,  # 调整高度适应更多数据
-                    hide_index=True,  # 隐藏索引
-                    column_config={
-                        "行权价": st.column_config.NumberColumn(width="small", format="%.4f"),
-                        "贴水价值": st.column_config.NumberColumn(width="small", format="%.4f"),
-                        "年化贴水率": st.column_config.TextColumn(width="small"),
-                        "剩余天数": st.column_config.NumberColumn(width="small", format="%d")  # 整数格式
-                    }
-                )
-    else:
-        st.warning("未能计算出任何有效的贴水数据")
-    
-    # 更新最后刷新时间
-    beijing_tz = datetime.timezone(datetime.timedelta(hours=8))
-    beijing_time = datetime.datetime.now(beijing_tz)
-    last_update.text(f"最后更新时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
+                # 直接使用合约交易代码作为CONTRACT_ID在映射中查找
+                call_security_id = None
+                if call_contract_code in option_mapping:
+                    call_security_id = option_mapping[call_contract_code]['security_id']
+                
+                # 获取Put期权实时价格（使用买价）
+                put_contract_code = puts.iloc[0]['合约交易代码']
+                put_strike = puts.iloc[0]['行权价']
+                
+                # 直接使用合约交易代码作为CONTRACT_ID在映射中查找
+                put_security_id = None
+                if put_contract_code in option_mapping:
+                    put_security_id = option_mapping[put_contract_code]['security_id']
+                
+                # 获取实时价格
+                if call_security_id:
+                    call_price = get_real_time_option_price(call_security_id, 'C')
+                    if call_price is not None:
+                        real_time_count['call_success'] += 1
+                else:
+                    call_price = calls.iloc[0]['当前价']  # fallback到原有数据
+                
+                if put_security_id:
+                    put_price = get_real_time_option_price(put_security_id, 'P')
+                    if put_price is not None:
+                        real_time_count['put_success'] += 1
+                else:
+                    put_price = puts.iloc[0]['当前价']  # fallback到原有数据
+                
+                # 如果无法获取实时价格，使用原有数据
+                if call_price is None:
+                    call_price = calls.iloc[0]['当前价']
+                if put_price is None:
+                    put_price = puts.iloc[0]['当前价']
+                
+                strike = calls.iloc[0]['行权价']
+                
+                # 使用改进的ETF价格获取函数
+                etf_price = get_etf_price(group.name[0])
+                if etf_price <= 0:
+                    return None  # 如果ETF价格获取失败，跳过计算
+                    
+                synthetic_price = call_price - put_price + strike
+                premium_value = synthetic_price - etf_price
+                
+                # 精确计算剩余天数（每月第4个星期三到期）
+                expiry_date_str = calls.iloc[0]['合约交易代码'][7:11]  # 格式如"2506"
+                year = 2000 + int(expiry_date_str[:2])  # 前两位是年份
+                month = int(expiry_date_str[2:4])       # 后两位是月份
+                first_day = datetime.date(year, month, 1)
+                # 计算第一个星期三
+                first_wednesday = first_day + datetime.timedelta(days=(2 - first_day.weekday()) % 7)
+                # 第四个星期三 = 第一个星期三 + 3周
+                expiry_date = first_wednesday + datetime.timedelta(weeks=3)
+                days_to_maturity = (expiry_date - datetime.date.today()).days
+                
+                return pd.Series({
+                    '贴水价值': round(premium_value, 4),
+                    '年化贴水率': round((premium_value / etf_price) * (365 / max(days_to_maturity, 1)), 4),  # 避免除以0
+                    '剩余天数': int(days_to_maturity)  # 只保留整数部分
+                })
+        
+        # 计算贴水
+        premium_df = option_finance_board_df.groupby(['ETF类型', '合约月份', '行权价']).apply(calculate_premium).reset_index()
+        update_progress(80, "期权贴水计算完成")
+        
+        # 确保合约月份列存在后再进行后续操作
+        if '合约月份' not in option_finance_board_df.columns:
+            st.error("无法从合约交易代码中提取月份信息")
+            update_progress(100, "数据处理失败")
+            return
+        
+        # 步骤5: 数据处理和展示准备 - 90%
+        update_progress(85, "正在处理数据...")
+        
+        # 移除空值行
+        premium_df = premium_df.dropna()
+        
+        # 改进的ETF类型名称显示
+        etf_display_names = {
+            "华泰柏瑞沪深300ETF期权": "300ETF",
+            "南方中证500ETF期权": "500ETF", 
+            "华夏上证50ETF期权": "50ETF",
+            "华夏科创50ETF期权": "科创50ETF",
+            "易方达科创50ETF期权": "科创板50ETF"
+        }
+        
+        # 步骤6: 显示数据 - 100%
+        update_progress(95, "正在生成数据展示...")
+        
+        # 显示数据 - 使用更灵活的列布局
+        if not premium_df.empty:
+            # 计算需要的列数
+            unique_combinations = premium_df.groupby(['ETF类型', '合约月份']).size()
+            num_combinations = len(unique_combinations)
+            
+            # 动态调整列数，最多4列
+            num_cols = min(4, num_combinations)
+            cols = st.columns(num_cols)
+            
+            for i, ((etf_type, month), group) in enumerate(premium_df.groupby(['ETF类型', '合约月份'])):
+                with cols[i % num_cols]:  # 循环使用列
+                    # 替换ETF类型名称
+                    display_name = etf_display_names.get(etf_type, etf_type)
+                    st.subheader(f"{display_name} - {month}月合约")
+                    
+                    # 复制一份数据避免修改原始数据
+                    display_df = group.copy()
+                    # 将年化贴水率转换为百分比格式前先排序
+                    display_df = display_df.sort_values('年化贴水率', ascending=True)
+                    # 将年化贴水率转换为百分比格式，保留4位小数
+                    display_df['年化贴水率'] = (display_df['年化贴水率'] * 100).round(4).astype(str) + '%'
+                    # 对其他数值列进行4位小数格式化
+                    if '贴水价值' in display_df.columns:
+                        display_df['贴水价值'] = display_df['贴水价值'].round(4)
+                    if '行权价' in display_df.columns:
+                        display_df['行权价'] = display_df['行权价'].round(4)
+                    if '剩余天数' in display_df.columns:
+                        display_df['剩余天数'] = display_df['剩余天数'].astype(int)  # 只保留整数部分
+                    # 设置紧凑布局
+                    st.dataframe(
+                        display_df[['行权价', '贴水价值', '年化贴水率', '剩余天数']],
+                        use_container_width=True,
+                        height=300,  # 调整高度适应更多数据
+                        hide_index=True,  # 隐藏索引
+                        column_config={
+                            "行权价": st.column_config.NumberColumn(width="small", format="%.4f"),
+                            "贴水价值": st.column_config.NumberColumn(width="small", format="%.4f"),
+                            "年化贴水率": st.column_config.TextColumn(width="small"),
+                            "剩余天数": st.column_config.NumberColumn(width="small", format="%d")  # 整数格式
+                        }
+                    )
+        else:
+            st.warning("未能计算出任何有效的贴水数据")
+        
+        # 完成
+        update_progress(100, "数据刷新完成！")
+        
+        # 更新最后刷新时间
+        beijing_tz = datetime.timezone(datetime.timedelta(hours=8))
+        beijing_time = datetime.datetime.now(beijing_tz)
+        last_update.text(f"最后更新时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
 
-    # 将结果存储到全局变量中
-    st.session_state.latest_premium_data = premium_df
+        # 将结果存储到全局变量中
+        st.session_state.latest_premium_data = premium_df
+        
+    except Exception as e:
+        st.error(f"数据获取过程中出现错误: {str(e)}")
+        update_progress(100, "数据获取失败")
+    finally:
+        # 延迟一下让用户看到100%完成状态
+        time.sleep(0.5)
+        progress_bar.empty()
+        progress_text.empty()
 
 # 处理保存按钮点击
 if save_button:
