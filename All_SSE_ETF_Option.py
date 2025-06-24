@@ -145,6 +145,95 @@ st.markdown("""
 数据将保存到GitHub仓库中。
 """)
 
+# 自动计算合约月份的函数
+def get_contract_months():
+    """根据第4个星期三规则自动计算合约月份"""
+    today = datetime.date.today()
+    
+    # 计算本月第4个星期三
+    first_day = datetime.date(today.year, today.month, 1)
+    # 计算第一个星期三
+    first_wednesday = first_day + datetime.timedelta(days=(2 - first_day.weekday()) % 7)
+    # 第四个星期三 = 第一个星期三 + 3周
+    fourth_wednesday = first_wednesday + datetime.timedelta(weeks=3)
+    
+    # 判断今天是否在本月第4个周三及之前
+    if today <= fourth_wednesday:
+        # 使用本月作为基准
+        base_month = today.month
+        base_year = today.year
+    else:
+        # 使用下月作为基准
+        if today.month == 12:
+            base_month = 1
+            base_year = today.year + 1
+        else:
+            base_month = today.month + 1
+            base_year = today.year
+    
+    # 计算4个合约月份
+    contract_months = []
+    
+    # 本月合约
+    current_month = f"{base_year % 100:02d}{base_month:02d}"
+    contract_months.append(current_month)
+    
+    # 下月合约
+    if base_month == 12:
+        next_month = 1
+        next_year = base_year + 1
+    else:
+        next_month = base_month + 1
+        next_year = base_year
+    next_month_contract = f"{next_year % 100:02d}{next_month:02d}"
+    contract_months.append(next_month_contract)
+    
+    # 本季合约（3、6、9、12月）
+    quarter_months = [3, 6, 9, 12]
+    current_quarter_month = None
+    current_quarter_year = base_year
+    
+    for qm in quarter_months:
+        if base_month <= qm:
+            current_quarter_month = qm
+            break
+    
+    if current_quarter_month is None:
+        current_quarter_month = 3
+        current_quarter_year = base_year + 1
+    
+    current_quarter_contract = f"{current_quarter_year % 100:02d}{current_quarter_month:02d}"
+    
+    # 检查本季合约是否与本月或下月合约重复
+    if current_quarter_contract in [current_month, next_month_contract]:
+        # 如果重复，将本季和下季合约都往后推一个季度
+        if current_quarter_month == 12:
+            current_quarter_month = 3
+            current_quarter_year += 1
+        else:
+            current_quarter_month = quarter_months[quarter_months.index(current_quarter_month) + 1]
+        
+        current_quarter_contract = f"{current_quarter_year % 100:02d}{current_quarter_month:02d}"
+    
+    contract_months.append(current_quarter_contract)
+    
+    # 下季合约
+    if current_quarter_month == 12:
+        next_quarter_month = 3
+        next_quarter_year = current_quarter_year + 1
+    else:
+        next_quarter_month = quarter_months[quarter_months.index(current_quarter_month) + 1]
+        next_quarter_year = current_quarter_year
+    
+    next_quarter_contract = f"{next_quarter_year % 100:02d}{next_quarter_month:02d}"
+    contract_months.append(next_quarter_contract)
+    
+    return contract_months
+
+# 显示当前使用的合约月份
+current_contract_months = get_contract_months()
+st.info(f"📅 当前使用的合约月份: {', '.join(current_contract_months)} (根据第4个星期三规则自动计算)")
+
 # 顶部控制栏 - 包含保存按钮和刷新控制
 col1, col2, col3 = st.columns([1.5, 2, 2.5])
 with col1:
@@ -174,7 +263,7 @@ def get_previous_trade_date():
     return previous_date.strftime("%Y%m%d")
 
 # 建立期权代码映射关系
-@st.cache_data(ttl=3600)  # 缓存1小时
+@st.cache_data(ttl=43200)  # 缓存12小时
 def get_option_code_mapping():
     """建立CONTRACT_ID到SECURITY_ID的映射关系"""
     mapping = {}
@@ -269,10 +358,10 @@ def get_real_time_option_price(security_id, option_type):
     except Exception as e:
         return None
 
-# 获取基础期权数据（缓存1小时）
-@st.cache_data(ttl=3600)
+# 获取基础期权数据（缓存12小时）
+@st.cache_data(ttl=43200)
 def get_basic_option_data():
-    """获取基础期权数据，缓存1小时"""
+    """获取基础期权数据，缓存12小时"""
     etf_symbols = [
         "华泰柏瑞沪深300ETF期权",      # 300ETF
         "南方中证500ETF期权",          # 500ETF
@@ -280,7 +369,9 @@ def get_basic_option_data():
         "华夏科创50ETF期权",           # 科创50ETF
         "易方达科创50ETF期权"          # 科创板50ETF
     ]
-    contract_months = ["2506", "2507", "2509", "2512"]
+    
+    # 自动获取合约月份
+    contract_months = get_contract_months()
     
     all_option_data = []
     for symbol in etf_symbols:
@@ -338,12 +429,12 @@ def get_and_display_data():
         progress_text.text(f"🔄 {text} ({progress}%)")
     
     try:
-        # 步骤1: 获取期权代码映射关系（缓存1小时）- 10%
+        # 步骤1: 获取期权代码映射关系（缓存12小时）- 10%
         update_progress(5, "正在获取期权代码映射关系...")
         option_mapping = get_option_code_mapping()
         update_progress(10, "期权代码映射关系获取完成")
         
-        # 步骤2: 获取基础期权数据（缓存1小时）- 30%
+        # 步骤2: 获取基础期权数据（缓存12小时）- 30%
         update_progress(15, "正在获取基础期权数据...")
         option_finance_board_df = get_basic_option_data()
         update_progress(30, "基础期权数据获取完成")
@@ -593,5 +684,5 @@ if auto_refresh and time_since_refresh >= 300:
 # 显示数据
 get_and_display_data()
 
-# 移除自动刷新后台检查，避免在Streamlit Cloud中阻塞
+# 移除自动刷新后台检查，避免阻塞主线程
 # 自动刷新将通过页面重新加载来实现，而不是后台sleep
