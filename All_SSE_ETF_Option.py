@@ -684,5 +684,8 @@ if auto_refresh and time_since_refresh >= 300:
 # 显示数据
 get_and_display_data()
 
-# 移除自动刷新后台检查，避免阻塞主线程
-# 自动刷新将通过页面重新加载来实现，而不是后台sleep
+# 自动刷新后台检查 - 每5分钟检查一次，确保不错过刷新时机
+if auto_refresh:
+    # 使用较长的检查间隔，避免频繁刷新
+    time.sleep(300)  # 每5分钟检查一次
+    st.rerun()
