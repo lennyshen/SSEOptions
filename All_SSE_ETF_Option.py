@@ -241,7 +241,7 @@ with col1:
 with col2:
     refresh_button = st.button("🔄 手动刷新数据")
 with col3:
-    auto_refresh = st.checkbox("启用自动刷新(每5分钟，仅交易时间9:30-15:00)", value=True)
+    auto_refresh = st.checkbox("启用自动刷新(每5分钟，仅交易时间9:30-15:15)", value=True)
 
 # 上次更新时间显示
 last_update = st.empty()
@@ -264,16 +264,16 @@ def get_previous_trade_date():
 
 # 检查是否在交易时间的函数
 def is_trading_time():
-    """检查当前是否为交易时间（工作日9:30-15:00）"""
+    """检查当前是否为交易时间（工作日9:30-15:15）"""
     now = datetime.datetime.now()
     
     # 检查是否为工作日（周一到周五）
     if now.weekday() >= 5:  # 周六=5, 周日=6
         return False
     
-    # 检查时间是否在9:30-15:00之间
+    # 检查时间是否在9:30-15:15之间
     trading_start = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    trading_end = now.replace(hour=15, minute=0, second=0, microsecond=0)
+    trading_end = now.replace(hour=15, minute=15, second=0, microsecond=0)
     
     return trading_start <= now <= trading_end
 
