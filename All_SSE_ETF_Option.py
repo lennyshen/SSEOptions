@@ -241,7 +241,7 @@ with col1:
 with col2:
     refresh_button = st.button("🔄 手动刷新数据")
 with col3:
-    auto_refresh = st.checkbox("启用自动刷新(每5分钟)", value=True)
+    auto_refresh = st.checkbox("启用自动刷新(每5分钟，仅交易时间9:30-15:00)", value=True)
 
 # 上次更新时间显示
 last_update = st.empty()
@@ -261,6 +261,21 @@ def get_previous_trade_date():
         previous_date = today - datetime.timedelta(days=1)
     
     return previous_date.strftime("%Y%m%d")
+
+# 检查是否在交易时间的函数
+def is_trading_time():
+    """检查当前是否为交易时间（工作日9:30-15:00）"""
+    now = datetime.datetime.now()
+    
+    # 检查是否为工作日（周一到周五）
+    if now.weekday() >= 5:  # 周六=5, 周日=6
+        return False
+    
+    # 检查时间是否在9:30-15:00之间
+    trading_start = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    trading_end = now.replace(hour=15, minute=0, second=0, microsecond=0)
+    
+    return trading_start <= now <= trading_end
 
 # 建立期权代码映射关系
 @st.cache_data(ttl=43200)  # 缓存12小时
@@ -673,8 +688,8 @@ if refresh_button:
     get_basic_option_data.clear()
     st.rerun()  # 立即刷新
 
-# 自动刷新检查 - 如果到时间就立即刷新
-if auto_refresh and time_since_refresh >= 300:
+# 自动刷新检查 - 如果到时间且在交易时间就立即刷新
+if auto_refresh and time_since_refresh >= 300 and is_trading_time():
     st.session_state.last_refresh_time = time.time()
     # 清除缓存以强制重新获取数据
     get_option_code_mapping.clear()
@@ -684,8 +699,8 @@ if auto_refresh and time_since_refresh >= 300:
 # 显示数据
 get_and_display_data()
 
-# 自动刷新后台检查 - 每5分钟检查一次，确保不错过刷新时机
-if auto_refresh:
+# 自动刷新后台检查 - 仅在交易时间每5分钟检查一次
+if auto_refresh and is_trading_time():
     # 使用较长的检查间隔，避免频繁刷新
     time.sleep(300)  # 每5分钟检查一次
     st.rerun()
