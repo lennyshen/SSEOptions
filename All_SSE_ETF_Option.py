@@ -699,8 +699,8 @@ if auto_refresh and time_since_refresh >= 300 and is_trading_time():
 # 显示数据
 get_and_display_data()
 
-# 自动刷新后台检查 - 仅在交易时间每5分钟检查一次
+# 自动刷新后台检查 - 仅在交易时间且启用自动刷新时定期检查
 if auto_refresh and is_trading_time():
-    # 使用较长的检查间隔，避免频繁刷新
-    time.sleep(300)  # 每5分钟检查一次
+    # 每30秒检查一次，避免频繁重载
+    time.sleep(30)
     st.rerun()
