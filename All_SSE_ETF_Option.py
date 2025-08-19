@@ -266,8 +266,10 @@ def get_previous_trade_date():
 
 # 检查是否在交易时间的函数
 def is_trading_time():
-    """检查当前是否为交易时间（工作日9:30-15:15）"""
-    now = datetime.datetime.now()
+    """检查当前是否为交易时间（工作日9:30-15:15，北京时间UTC+8）"""
+    # 获取北京时间（UTC+8）
+    beijing_tz = datetime.timezone(datetime.timedelta(hours=8))
+    now = datetime.datetime.now(beijing_tz)
     
     # 检查是否为工作日（周一到周五）
     if now.weekday() >= 5:  # 周六=5, 周日=6
@@ -792,16 +794,19 @@ if refresh_button:
     st.rerun()  # 立即刷新
 
 # 获取当前时间状态（确保整个处理过程中时间判断一致）
-current_time = datetime.datetime.now()
+# 获取北京时间（UTC+8）
+beijing_tz = datetime.timezone(datetime.timedelta(hours=8))
+current_time = datetime.datetime.now(beijing_tz)
 is_trading = is_trading_time()
 weekday = current_time.weekday()  # 0=周一, 6=周日
 
 # 调试显示
 st.sidebar.write("### 调试信息")
-st.sidebar.write(f"当前时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+st.sidebar.write(f"北京时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
 st.sidebar.write(f"星期: {['周一', '周二', '周三', '周四', '周五', '周六', '周日'][weekday]}")
 st.sidebar.write(f"是否工作日: {weekday < 5}")
 st.sidebar.write(f"是否交易时间: {is_trading}")
+st.sidebar.write(f"交易时间段: 9:30-15:15")
 st.sidebar.write(f"自动刷新开启: {auto_refresh}")
 st.sidebar.write(f"手动刷新按钮: {refresh_button}")
 st.sidebar.write(f"距离上次刷新: {time_since_refresh:.1f}秒")
@@ -829,8 +834,8 @@ if should_get_data:
     get_and_display_data()
 else:
     # 非交易时间显示提示信息
-    st.info("📅 当前不在交易时间（工作日9:30-15:15），数据获取已暂停")
-    st.info(f"⏰ 当前时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    st.info("📅 当前不在交易时间（工作日9:30-15:15，北京时间），数据获取已暂停")
+    st.info(f"⏰ 北京时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # 显示上次的数据（如果有的话）
     if st.session_state.latest_premium_data is not None and not st.session_state.latest_premium_data.empty:
