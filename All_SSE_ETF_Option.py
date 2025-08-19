@@ -6,6 +6,8 @@ import time
 import requests
 import base64
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dateutil.relativedelta import relativedelta
 
 # 页面配置
@@ -505,25 +507,38 @@ def get_and_display_data():
             return etf_prices.get("sh510300", 0.0)
         
         # 步骤4: 开始计算贴水 - 60%
-        update_progress(55, "正在计算期权贴水...")
+        update_progress(55, "正在计算期权贴水... (使用4线程并行计算)")
         
         # 获取所有需要计算的组合
         grouped_data = option_finance_board_df.groupby(['ETF类型', '合约月份', '行权价'])
-        total_groups = len(grouped_data)
+        group_list = [(key, group) for key, group in grouped_data]
+        total_groups = len(group_list)
         
-        # 初始化结果列表
+        # 线程安全的进度计数器
+        progress_lock = threading.Lock()
+        completed_count = [0]  # 使用列表以便在函数内修改
+        
+        # 初始化结果列表（线程安全）
         premium_results = []
-        current_group = 0
+        results_lock = threading.Lock()
         
-        # 计算贴水
-        def calculate_premium(group, etf_type, month, strike):
+        # 简化ETF类型名称显示的映射
+        etf_display_names = {
+            "华泰柏瑞沪深300ETF期权": "300ETF",
+            "南方中证500ETF期权": "500ETF", 
+            "华夏上证50ETF期权": "50ETF",
+            "华夏科创50ETF期权": "科创50ETF",
+            "易方达科创50ETF期权": "科创板50ETF"
+        }
+        
+        # 计算贴水的工作函数
+        def calculate_premium_worker(group_data):
+            (etf_type, month, strike), group = group_data
+            
             calls = group[group['合约交易代码'].str.contains('C')]
             puts = group[group['合约交易代码'].str.contains('P')]
             
             if len(calls) > 0 and len(puts) > 0:
-                real_time_count['call_total'] += 1
-                real_time_count['put_total'] += 1
-                
                 # 获取Call期权实时价格（使用卖价）
                 call_contract_code = calls.iloc[0]['合约交易代码']
                 call_strike = calls.iloc[0]['行权价']
@@ -546,14 +561,16 @@ def get_and_display_data():
                 if call_security_id:
                     call_price = get_real_time_option_price(call_security_id, 'C')
                     if call_price is not None:
-                        real_time_count['call_success'] += 1
+                        with progress_lock:
+                            real_time_count['call_success'] += 1
                 else:
                     call_price = calls.iloc[0]['当前价']  # fallback到原有数据
                 
                 if put_security_id:
                     put_price = get_real_time_option_price(put_security_id, 'P')
                     if put_price is not None:
-                        real_time_count['put_success'] += 1
+                        with progress_lock:
+                            real_time_count['put_success'] += 1
                 else:
                     put_price = puts.iloc[0]['当前价']  # fallback到原有数据
                 
@@ -584,6 +601,16 @@ def get_and_display_data():
                 expiry_date = first_wednesday + datetime.timedelta(weeks=3)
                 days_to_maturity = (expiry_date - datetime.date.today()).days
                 
+                # 线程安全地更新计数器和进度
+                with progress_lock:
+                    completed_count[0] += 1
+                    real_time_count['call_total'] += 1
+                    real_time_count['put_total'] += 1
+                    
+                    # 更新进度显示
+                    display_name = etf_display_names.get(etf_type, etf_type)
+                    update_contract_progress(completed_count[0], total_groups, display_name, month)
+                
                 return {
                     'ETF类型': etf_type,
                     '合约月份': month,
@@ -592,28 +619,30 @@ def get_and_display_data():
                     '年化贴水率': round((premium_value / etf_price) * (365 / max(days_to_maturity, 1)), 4),  # 避免除以0
                     '剩余天数': int(days_to_maturity)  # 只保留整数部分
                 }
-            return None
+            else:
+                # 即使没有计算结果，也要更新进度
+                with progress_lock:
+                    completed_count[0] += 1
+                    display_name = etf_display_names.get(etf_type, etf_type)
+                    update_contract_progress(completed_count[0], total_groups, display_name, month)
+                return None
         
-        # 遍历每个组合并计算贴水
-        for (etf_type, month, strike), group in grouped_data:
-            current_group += 1
+        # 使用线程池并行计算
+        max_workers = 4  # 使用4个线程
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_group = {executor.submit(calculate_premium_worker, group_data): group_data for group_data in group_list}
             
-            # 更新合约计算进度
-            # 简化ETF类型名称显示
-            etf_display_names = {
-                "华泰柏瑞沪深300ETF期权": "300ETF",
-                "南方中证500ETF期权": "500ETF", 
-                "华夏上证50ETF期权": "50ETF",
-                "华夏科创50ETF期权": "科创50ETF",
-                "易方达科创50ETF期权": "科创板50ETF"
-            }
-            display_name = etf_display_names.get(etf_type, etf_type)
-            update_contract_progress(current_group, total_groups, display_name, month)
-            
-            # 计算这个组合的贴水
-            result = calculate_premium(group, etf_type, month, strike)
-            if result is not None:
-                premium_results.append(result)
+            # 收集结果
+            for future in as_completed(future_to_group):
+                try:
+                    result = future.result()
+                    if result is not None:
+                        with results_lock:
+                            premium_results.append(result)
+                except Exception as e:
+                    # 记录错误但继续处理其他任务
+                    st.warning(f"计算期权贴水时出现错误: {str(e)}")
         
         # 将结果转换为DataFrame
         premium_df = pd.DataFrame(premium_results)
