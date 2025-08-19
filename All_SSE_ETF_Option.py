@@ -810,6 +810,11 @@ st.sidebar.write(f"交易时间段: 9:30-15:15")
 st.sidebar.write(f"自动刷新开启: {auto_refresh}")
 st.sidebar.write(f"手动刷新按钮: {refresh_button}")
 st.sidebar.write(f"距离上次刷新: {time_since_refresh:.1f}秒")
+st.sidebar.write("---")
+st.sidebar.write("### 数据获取逻辑")
+st.sidebar.write(f"手动刷新: {refresh_button}")
+st.sidebar.write(f"自动刷新且在交易时间: {auto_refresh and is_trading}")
+st.sidebar.write(f"关闭自动刷新: {not auto_refresh}")
 
 # 自动刷新检查 - 如果到时间且在交易时间就立即刷新
 if auto_refresh and time_since_refresh >= 300 and is_trading:
@@ -820,21 +825,22 @@ if auto_refresh and time_since_refresh >= 300 and is_trading:
     get_basic_option_data.clear()
     st.rerun()  # 立即刷新
 
-# 显示数据 - 只有在交易时间或手动操作时才获取数据
-should_get_data = is_trading or refresh_button or not auto_refresh
+# 显示数据 - 手动刷新任何时候都可以，自动刷新只在交易时间
+should_get_data = refresh_button or (auto_refresh and is_trading) or not auto_refresh
 st.sidebar.write(f"是否应该获取数据: {should_get_data}")
 
 if should_get_data:
-    if is_trading:
-        st.info("✅ 交易时间内，正在获取实时数据")
-    elif refresh_button:
+    if refresh_button:
         st.info("🔄 手动刷新触发，正在获取数据")
+    elif auto_refresh and is_trading:
+        st.info("✅ 交易时间内，正在获取实时数据")
     elif not auto_refresh:
         st.info("📱 自动刷新已关闭，正在获取数据")
     get_and_display_data()
 else:
-    # 非交易时间显示提示信息
-    st.info("📅 当前不在交易时间（工作日9:30-15:15，北京时间），数据获取已暂停")
+    # 这种情况下是：启用了自动刷新但不在交易时间，且没有手动刷新
+    st.info("📅 当前不在交易时间（工作日9:30-15:15，北京时间），自动刷新已暂停")
+    st.info("💡 您可以点击'手动刷新数据'按钮随时获取最新数据")
     st.info(f"⏰ 北京时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # 显示上次的数据（如果有的话）
