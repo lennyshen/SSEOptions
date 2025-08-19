@@ -804,26 +804,29 @@ weekday = current_time.weekday()  # 0=周一, 6=周日
 # 检查是否有手动刷新标记
 manual_refresh = st.session_state.get('manual_refresh_triggered', False)
 
-# 调试显示
-st.sidebar.write("### 调试信息")
-st.sidebar.write(f"北京时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
-st.sidebar.write(f"星期: {['周一', '周二', '周三', '周四', '周五', '周六', '周日'][weekday]}")
-st.sidebar.write(f"是否工作日: {weekday < 5}")
-st.sidebar.write(f"是否交易时间: {is_trading}")
-st.sidebar.write(f"交易时间段: 9:30-15:15")
-st.sidebar.write(f"自动刷新开启: {auto_refresh}")
-st.sidebar.write(f"手动刷新按钮: {refresh_button}")
-st.sidebar.write(f"距离上次刷新: {time_since_refresh:.1f}秒")
-st.sidebar.write("---")
-st.sidebar.write("### 数据获取逻辑")
-st.sidebar.write(f"手动刷新按钮: {refresh_button}")
-st.sidebar.write(f"手动刷新标记: {manual_refresh}")
-st.sidebar.write(f"自动刷新且在交易时间: {auto_refresh and is_trading}")
-st.sidebar.write(f"关闭自动刷新: {not auto_refresh}")
+# 调试信息（折叠显示）
+with st.sidebar.expander("🔧 调试信息", expanded=False):
+    st.write("### 时间状态")
+    st.write(f"北京时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    st.write(f"星期: {['周一', '周二', '周三', '周四', '周五', '周六', '周日'][weekday]}")
+    st.write(f"是否工作日: {weekday < 5}")
+    st.write(f"是否交易时间: {is_trading}")
+    st.write(f"交易时间段: 9:30-15:15")
+    
+    st.write("### 刷新状态")
+    st.write(f"自动刷新开启: {auto_refresh}")
+    st.write(f"手动刷新按钮: {refresh_button}")
+    st.write(f"手动刷新标记: {manual_refresh}")
+    st.write(f"距离上次刷新: {time_since_refresh:.1f}秒")
+    
+    st.write("### 数据获取逻辑")
+    st.write(f"手动刷新: {refresh_button}")
+    st.write(f"手动刷新标记: {manual_refresh}")
+    st.write(f"自动刷新且在交易时间: {auto_refresh and is_trading}")
+    st.write(f"关闭自动刷新: {not auto_refresh}")
 
 # 自动刷新检查 - 如果到时间且在交易时间就立即刷新
 if auto_refresh and time_since_refresh >= 300 and is_trading:
-    st.sidebar.write("🔄 触发自动刷新...")
     st.session_state.last_refresh_time = time.time()
     # 清除缓存以强制重新获取数据
     get_option_code_mapping.clear()
@@ -836,7 +839,6 @@ if manual_refresh:
 
 # 显示数据 - 手动刷新任何时候都可以，自动刷新只在交易时间
 should_get_data = manual_refresh or (auto_refresh and is_trading) or not auto_refresh
-st.sidebar.write(f"是否应该获取数据: {should_get_data}")
 
 if should_get_data:
     if manual_refresh:
@@ -904,13 +906,6 @@ else:
 
 # 自动刷新后台检查 - 仅在交易时间且启用自动刷新时定期检查
 if auto_refresh and is_trading:
-    st.sidebar.write("🔄 自动刷新激活中...")
     # 每30秒检查一次，避免频繁重载
     time.sleep(30)
     st.rerun()
-else:
-    # 在非交易时间或自动刷新关闭时，不执行任何后台操作
-    if auto_refresh and not is_trading:
-        st.sidebar.write("⏸️ 自动刷新已暂停（非交易时间）")
-    elif not auto_refresh:
-        st.sidebar.write("📴 自动刷新已关闭")
