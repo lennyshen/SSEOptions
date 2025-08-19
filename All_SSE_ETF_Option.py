@@ -799,8 +799,63 @@ if auto_refresh and time_since_refresh >= 300 and is_trading_time():
     get_basic_option_data.clear()
     st.rerun()  # 立即刷新
 
-# 显示数据
-get_and_display_data()
+# 显示数据 - 只有在交易时间或手动操作时才获取数据
+if is_trading_time() or refresh_button or not auto_refresh:
+    get_and_display_data()
+else:
+    # 非交易时间显示提示信息
+    st.info("📅 当前不在交易时间（工作日9:30-15:15），数据获取已暂停")
+    st.info(f"⏰ 当前时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # 显示上次的数据（如果有的话）
+    if st.session_state.latest_premium_data is not None and not st.session_state.latest_premium_data.empty:
+        st.info("📊 以下显示最后一次获取的数据：")
+        
+        # 显示数据的简化版本
+        premium_df = st.session_state.latest_premium_data
+        
+        # 改进的ETF类型名称显示
+        etf_display_names = {
+            "华泰柏瑞沪深300ETF期权": "300ETF",
+            "南方中证500ETF期权": "500ETF", 
+            "华夏上证50ETF期权": "50ETF",
+            "华夏科创50ETF期权": "科创50ETF",
+            "易方达科创50ETF期权": "科创板50ETF"
+        }
+        
+        # 计算需要的列数
+        unique_combinations = premium_df.groupby(['ETF类型', '合约月份']).size()
+        num_combinations = len(unique_combinations)
+        
+        # 动态调整列数，最多4列
+        num_cols = min(4, num_combinations)
+        cols = st.columns(num_cols)
+        
+        for i, ((etf_type, month), group) in enumerate(premium_df.groupby(['ETF类型', '合约月份'])):
+            with cols[i % num_cols]:  # 循环使用列
+                # 替换ETF类型名称
+                display_name = etf_display_names.get(etf_type, etf_type)
+                st.subheader(f"{display_name} - {month}月合约")
+                
+                # 复制一份数据避免修改原始数据
+                display_df = group.copy()
+                # 将年化贴水率转换为百分比格式前先排序
+                display_df = display_df.sort_values('年化贴水率', ascending=True)
+                # 将年化贴水率转换为百分比格式，保留4位小数
+                display_df['年化贴水率'] = (display_df['年化贴水率'] * 100).round(4).astype(str) + '%'
+                # 设置紧凑布局
+                st.dataframe(
+                    display_df[['行权价', '贴水价值', '年化贴水率', '剩余天数']],
+                    use_container_width=True,
+                    height=300,
+                    hide_index=True,
+                    column_config={
+                        "行权价": st.column_config.NumberColumn(width="small", format="%.4f"),
+                        "贴水价值": st.column_config.NumberColumn(width="small", format="%.4f"),
+                        "年化贴水率": st.column_config.TextColumn(width="small"),
+                        "剩余天数": st.column_config.NumberColumn(width="small", format="%d")
+                    }
+                )
 
 # 自动刷新后台检查 - 仅在交易时间且启用自动刷新时定期检查
 if auto_refresh and is_trading_time():
