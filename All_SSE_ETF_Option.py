@@ -788,6 +788,7 @@ time_since_refresh = current_time - st.session_state.last_refresh_time
 # 手动刷新按钮逻辑
 if refresh_button:
     st.session_state.last_refresh_time = time.time()
+    st.session_state.manual_refresh_triggered = True  # 设置手动刷新标记
     # 清除缓存以强制重新获取数据
     get_option_code_mapping.clear()
     get_basic_option_data.clear()
@@ -812,7 +813,8 @@ st.sidebar.write(f"手动刷新按钮: {refresh_button}")
 st.sidebar.write(f"距离上次刷新: {time_since_refresh:.1f}秒")
 st.sidebar.write("---")
 st.sidebar.write("### 数据获取逻辑")
-st.sidebar.write(f"手动刷新: {refresh_button}")
+st.sidebar.write(f"手动刷新按钮: {refresh_button}")
+st.sidebar.write(f"手动刷新标记: {manual_refresh}")
 st.sidebar.write(f"自动刷新且在交易时间: {auto_refresh and is_trading}")
 st.sidebar.write(f"关闭自动刷新: {not auto_refresh}")
 
@@ -825,12 +827,18 @@ if auto_refresh and time_since_refresh >= 300 and is_trading:
     get_basic_option_data.clear()
     st.rerun()  # 立即刷新
 
+# 检查是否有手动刷新标记
+manual_refresh = st.session_state.get('manual_refresh_triggered', False)
+if manual_refresh:
+    st.session_state.manual_refresh_triggered = False  # 清除标记
+
 # 显示数据 - 手动刷新任何时候都可以，自动刷新只在交易时间
-should_get_data = refresh_button or (auto_refresh and is_trading) or not auto_refresh
+should_get_data = manual_refresh or (auto_refresh and is_trading) or not auto_refresh
+st.sidebar.write(f"手动刷新标记: {manual_refresh}")
 st.sidebar.write(f"是否应该获取数据: {should_get_data}")
 
 if should_get_data:
-    if refresh_button:
+    if manual_refresh:
         st.info("🔄 手动刷新触发，正在获取数据")
     elif auto_refresh and is_trading:
         st.info("✅ 交易时间内，正在获取实时数据")
