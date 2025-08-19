@@ -558,19 +558,20 @@ def get_and_display_data():
                     put_security_id = option_mapping[put_contract_code]['security_id']
                 
                 # 获取实时价格
+                call_success = False
+                put_success = False
+                
                 if call_security_id:
                     call_price = get_real_time_option_price(call_security_id, 'C')
                     if call_price is not None:
-                        with progress_lock:
-                            real_time_count['call_success'] += 1
+                        call_success = True
                 else:
                     call_price = calls.iloc[0]['当前价']  # fallback到原有数据
                 
                 if put_security_id:
                     put_price = get_real_time_option_price(put_security_id, 'P')
                     if put_price is not None:
-                        with progress_lock:
-                            real_time_count['put_success'] += 1
+                        put_success = True
                 else:
                     put_price = puts.iloc[0]['当前价']  # fallback到原有数据
                 
@@ -601,15 +602,15 @@ def get_and_display_data():
                 expiry_date = first_wednesday + datetime.timedelta(weeks=3)
                 days_to_maturity = (expiry_date - datetime.date.today()).days
                 
-                # 线程安全地更新计数器和进度
+                # 线程安全地更新计数器
                 with progress_lock:
                     completed_count[0] += 1
                     real_time_count['call_total'] += 1
                     real_time_count['put_total'] += 1
-                    
-                    # 更新进度显示
-                    display_name = etf_display_names.get(etf_type, etf_type)
-                    update_contract_progress(completed_count[0], total_groups, display_name, month)
+                    if call_success:
+                        real_time_count['call_success'] += 1
+                    if put_success:
+                        real_time_count['put_success'] += 1
                 
                 return {
                     'ETF类型': etf_type,
@@ -623,26 +624,55 @@ def get_and_display_data():
                 # 即使没有计算结果，也要更新进度
                 with progress_lock:
                     completed_count[0] += 1
-                    display_name = etf_display_names.get(etf_type, etf_type)
-                    update_contract_progress(completed_count[0], total_groups, display_name, month)
                 return None
         
-        # 使用线程池并行计算
-        max_workers = 4  # 使用4个线程
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交所有任务
-            future_to_group = {executor.submit(calculate_premium_worker, group_data): group_data for group_data in group_list}
-            
-            # 收集结果
-            for future in as_completed(future_to_group):
-                try:
-                    result = future.result()
-                    if result is not None:
-                        with results_lock:
+        # 方案1：尝试多线程计算
+        try:
+            # 使用线程池并行计算
+            max_workers = 4  # 使用4个线程
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # 提交所有任务
+                future_to_group = {executor.submit(calculate_premium_worker, group_data): group_data for group_data in group_list}
+                
+                # 收集结果并在主线程中更新进度
+                completed_tasks = 0
+                for future in as_completed(future_to_group):
+                    try:
+                        result = future.result()
+                        completed_tasks += 1
+                        
+                        # 在主线程中更新进度显示
+                        group_data = future_to_group[future]
+                        (etf_type, month, strike) = group_data[0]
+                        display_name = etf_display_names.get(etf_type, etf_type)
+                        update_contract_progress(completed_tasks, total_groups, display_name, month)
+                        
+                        if result is not None:
                             premium_results.append(result)
+                            
+                    except Exception as e:
+                        # 记录详细的错误信息但继续处理
+                        st.warning(f"单个期权计算失败: {str(e)}")
+                        completed_tasks += 1
+                        
+        except Exception as main_error:
+            # 如果多线程失败，回退到单线程模式
+            st.warning(f"多线程计算失败，回退到单线程模式: {str(main_error)}")
+            update_progress(55, "正在计算期权贴水... (单线程模式)")
+            
+            # 单线程计算
+            for i, group_data in enumerate(group_list):
+                try:
+                    (etf_type, month, strike) = group_data[0]
+                    display_name = etf_display_names.get(etf_type, etf_type)
+                    update_contract_progress(i + 1, total_groups, display_name, month)
+                    
+                    result = calculate_premium_worker(group_data)
+                    if result is not None:
+                        premium_results.append(result)
                 except Exception as e:
-                    # 记录错误但继续处理其他任务
-                    st.warning(f"计算期权贴水时出现错误: {str(e)}")
+                    st.warning(f"计算期权 {group_data[0]} 失败: {str(e)}")
+                    continue
         
         # 将结果转换为DataFrame
         premium_df = pd.DataFrame(premium_results)
