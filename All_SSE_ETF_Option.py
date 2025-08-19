@@ -507,7 +507,7 @@ def get_and_display_data():
             return etf_prices.get("sh510300", 0.0)
         
         # 步骤4: 开始计算贴水 - 60%
-        update_progress(55, "正在计算期权贴水... (使用4线程并行计算)")
+        update_progress(55, "正在计算期权贴水... (使用10线程并行计算)")
         
         # 获取所有需要计算的组合
         grouped_data = option_finance_board_df.groupby(['ETF类型', '合约月份', '行权价'])
@@ -629,7 +629,7 @@ def get_and_display_data():
         # 方案1：尝试多线程计算
         try:
             # 使用线程池并行计算
-            max_workers = 4  # 使用4个线程
+            max_workers = 10  # 使用10个线程
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # 提交所有任务
                 future_to_group = {executor.submit(calculate_premium_worker, group_data): group_data for group_data in group_list}
