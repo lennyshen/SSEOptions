@@ -801,6 +801,9 @@ current_time = datetime.datetime.now(beijing_tz)
 is_trading = is_trading_time()
 weekday = current_time.weekday()  # 0=周一, 6=周日
 
+# 检查是否有手动刷新标记
+manual_refresh = st.session_state.get('manual_refresh_triggered', False)
+
 # 调试显示
 st.sidebar.write("### 调试信息")
 st.sidebar.write(f"北京时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -827,14 +830,12 @@ if auto_refresh and time_since_refresh >= 300 and is_trading:
     get_basic_option_data.clear()
     st.rerun()  # 立即刷新
 
-# 检查是否有手动刷新标记
-manual_refresh = st.session_state.get('manual_refresh_triggered', False)
+# 清除手动刷新标记（使用后立即清除）
 if manual_refresh:
-    st.session_state.manual_refresh_triggered = False  # 清除标记
+    st.session_state.manual_refresh_triggered = False
 
 # 显示数据 - 手动刷新任何时候都可以，自动刷新只在交易时间
 should_get_data = manual_refresh or (auto_refresh and is_trading) or not auto_refresh
-st.sidebar.write(f"手动刷新标记: {manual_refresh}")
 st.sidebar.write(f"是否应该获取数据: {should_get_data}")
 
 if should_get_data:
