@@ -437,11 +437,19 @@ def get_and_display_data():
     # 创建进度条
     progress_bar = st.progress(0)
     progress_text = st.empty()
+    # 添加期权合约计算进度显示
+    contract_progress_text = st.empty()
     
     # 更新进度函数
     def update_progress(progress, text):
         progress_bar.progress(progress / 100)
         progress_text.text(f"🔄 {text} ({progress}%)")
+    
+    # 更新合约计算进度函数
+    def update_contract_progress(current, total, etf_type="", month=""):
+        if total > 0:
+            percentage = (current / total) * 100
+            contract_progress_text.text(f"📊 期权合约计算进度: {current}/{total} ({percentage:.1f}%) - 当前: {etf_type} {month}月")
     
     try:
         # 步骤1: 获取期权代码映射关系（缓存12小时）- 10%
@@ -499,8 +507,16 @@ def get_and_display_data():
         # 步骤4: 开始计算贴水 - 60%
         update_progress(55, "正在计算期权贴水...")
         
+        # 获取所有需要计算的组合
+        grouped_data = option_finance_board_df.groupby(['ETF类型', '合约月份', '行权价'])
+        total_groups = len(grouped_data)
+        
+        # 初始化结果列表
+        premium_results = []
+        current_group = 0
+        
         # 计算贴水
-        def calculate_premium(group):
+        def calculate_premium(group, etf_type, month, strike):
             calls = group[group['合约交易代码'].str.contains('C')]
             puts = group[group['合约交易代码'].str.contains('P')]
             
@@ -547,36 +563,63 @@ def get_and_display_data():
                 if put_price is None:
                     put_price = puts.iloc[0]['当前价']
                 
-                strike = calls.iloc[0]['行权价']
+                strike_price = calls.iloc[0]['行权价']
                 
                 # 使用改进的ETF价格获取函数
-                etf_price = get_etf_price(group.name[0])
+                etf_price = get_etf_price(etf_type)
                 if etf_price <= 0:
                     return None  # 如果ETF价格获取失败，跳过计算
                     
-                synthetic_price = call_price - put_price + strike
+                synthetic_price = call_price - put_price + strike_price
                 premium_value = synthetic_price - etf_price
                 
                 # 精确计算剩余天数（每月第4个星期三到期）
                 expiry_date_str = calls.iloc[0]['合约交易代码'][7:11]  # 格式如"2506"
                 year = 2000 + int(expiry_date_str[:2])  # 前两位是年份
-                month = int(expiry_date_str[2:4])       # 后两位是月份
-                first_day = datetime.date(year, month, 1)
+                month_num = int(expiry_date_str[2:4])       # 后两位是月份
+                first_day = datetime.date(year, month_num, 1)
                 # 计算第一个星期三
                 first_wednesday = first_day + datetime.timedelta(days=(2 - first_day.weekday()) % 7)
                 # 第四个星期三 = 第一个星期三 + 3周
                 expiry_date = first_wednesday + datetime.timedelta(weeks=3)
                 days_to_maturity = (expiry_date - datetime.date.today()).days
                 
-                return pd.Series({
+                return {
+                    'ETF类型': etf_type,
+                    '合约月份': month,
+                    '行权价': strike,
                     '贴水价值': round(premium_value, 4),
                     '年化贴水率': round((premium_value / etf_price) * (365 / max(days_to_maturity, 1)), 4),  # 避免除以0
                     '剩余天数': int(days_to_maturity)  # 只保留整数部分
-                })
+                }
+            return None
         
-        # 计算贴水
-        premium_df = option_finance_board_df.groupby(['ETF类型', '合约月份', '行权价']).apply(calculate_premium).reset_index()
+        # 遍历每个组合并计算贴水
+        for (etf_type, month, strike), group in grouped_data:
+            current_group += 1
+            
+            # 更新合约计算进度
+            # 简化ETF类型名称显示
+            etf_display_names = {
+                "华泰柏瑞沪深300ETF期权": "300ETF",
+                "南方中证500ETF期权": "500ETF", 
+                "华夏上证50ETF期权": "50ETF",
+                "华夏科创50ETF期权": "科创50ETF",
+                "易方达科创50ETF期权": "科创板50ETF"
+            }
+            display_name = etf_display_names.get(etf_type, etf_type)
+            update_contract_progress(current_group, total_groups, display_name, month)
+            
+            # 计算这个组合的贴水
+            result = calculate_premium(group, etf_type, month, strike)
+            if result is not None:
+                premium_results.append(result)
+        
+        # 将结果转换为DataFrame
+        premium_df = pd.DataFrame(premium_results)
         update_progress(80, "期权贴水计算完成")
+        # 清除合约进度显示
+        contract_progress_text.empty()
         
         # 确保合约月份列存在后再进行后续操作
         if '合约月份' not in option_finance_board_df.columns:
@@ -666,6 +709,7 @@ def get_and_display_data():
         time.sleep(0.5)
         progress_bar.empty()
         progress_text.empty()
+        contract_progress_text.empty()
 
 # 处理保存按钮点击
 if save_button:
