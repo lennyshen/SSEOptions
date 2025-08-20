@@ -906,6 +906,11 @@ else:
 
 # 自动刷新后台检查 - 仅在交易时间且启用自动刷新时定期检查
 if auto_refresh and is_trading:
-    # 每30秒检查一次，避免频繁重载
-    time.sleep(30)
-    st.rerun()
+    # 只有当距离上次刷新时间不足5分钟时，才等待并重新检查
+    if time_since_refresh < 300:
+        # 计算还需要等待的时间
+        remaining_time = 300 - time_since_refresh
+        # 等待较短的时间间隔进行检查，但不超过剩余时间
+        wait_time = min(30, remaining_time)
+        time.sleep(wait_time)
+        st.rerun()
