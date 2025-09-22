@@ -40,12 +40,33 @@ def read_data_from_github():
             file_info = response.json()
             content = base64.b64decode(file_info['content']).decode('utf-8-sig')
             
+            # 检查内容是否为空或只包含空白字符
+            if not content or content.strip() == "":
+                st.warning("GitHub上的文件为空，将创建新的数据文件")
+                return pd.DataFrame(), file_info['sha']
+            
             # 从字符串创建DataFrame
             from io import StringIO
-            df = pd.read_csv(StringIO(content))
-            return df, file_info['sha']
-        else:
+            try:
+                df = pd.read_csv(StringIO(content))
+                # 检查DataFrame是否为空或没有列
+                if df.empty or len(df.columns) == 0:
+                    st.warning("GitHub上的文件没有有效数据，将创建新的数据文件")
+                    return pd.DataFrame(), file_info['sha']
+                return df, file_info['sha']
+            except pd.errors.EmptyDataError:
+                st.warning("GitHub上的CSV文件为空或格式不正确，将创建新的数据文件")
+                return pd.DataFrame(), file_info['sha']
+            except Exception as parse_error:
+                st.warning(f"解析CSV文件时出错: {str(parse_error)}，将创建新的数据文件")
+                return pd.DataFrame(), file_info['sha']
+        elif response.status_code == 404:
             # 文件不存在，返回空的DataFrame
+            st.info("GitHub上的文件不存在，将创建新的数据文件")
+            return pd.DataFrame(), None
+        else:
+            # 其他错误
+            st.error(f"访问GitHub文件失败: {response.status_code} - {response.text}")
             return pd.DataFrame(), None
             
     except Exception as e:
@@ -120,9 +141,28 @@ def save_data_to_github():
             "content": encoded_content
         }
         
-        # 如果文件已存在，添加sha
+        # 如果文件已存在且有SHA值，添加sha（用于更新现有文件）
         if sha:
             payload["sha"] = sha
+            st.info(f"正在更新现有文件，SHA: {sha[:8]}...")
+        else:
+            st.info("正在创建新文件...")
+        
+        # 如果没有SHA但尝试更新文件时失败，尝试重新获取SHA
+        if not sha:
+            # 再次尝试获取文件信息，防止并发操作导致的问题
+            try:
+                url_check = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+                headers_check = {"Authorization": f"token {GITHUB_TOKEN}"}
+                response_check = requests.get(url_check, headers=headers_check)
+                if response_check.status_code == 200:
+                    file_info_check = response_check.json()
+                    sha = file_info_check.get('sha')
+                    if sha:
+                        payload["sha"] = sha
+                        st.info(f"重新获取到文件SHA: {sha[:8]}，正在更新文件...")
+            except Exception as sha_retry_error:
+                st.warning(f"重新获取SHA时出错: {str(sha_retry_error)}，将尝试创建新文件")
         
         # 提交到GitHub
         url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
@@ -132,8 +172,44 @@ def save_data_to_github():
         if response.status_code in [200, 201]:
             st.success(f"✅ 数据已保存到GitHub仓库，共 {len(data_to_save)} 条记录")
             return True
+        elif response.status_code == 422:
+            # 422错误通常是SHA问题，尝试强制刷新
+            try:
+                error_info = response.json()
+                if "sha" in str(error_info).lower():
+                    st.warning("⚠️ SHA冲突，正在尝试重新获取最新文件状态...")
+                    
+                    # 强制重新获取最新的文件状态
+                    time.sleep(1)  # 短暂等待
+                    fresh_data, fresh_sha = read_data_from_github()
+                    
+                    if fresh_sha and fresh_sha != sha:
+                        # 使用最新的SHA重新尝试
+                        payload["sha"] = fresh_sha
+                        st.info(f"使用最新SHA重新提交: {fresh_sha[:8]}...")
+                        
+                        response_retry = requests.put(url, json=payload, headers=headers)
+                        if response_retry.status_code in [200, 201]:
+                            st.success(f"✅ 重试成功！数据已保存到GitHub仓库，共 {len(data_to_save)} 条记录")
+                            return True
+                        else:
+                            st.error(f"重试后仍然失败: {response_retry.status_code} - {response_retry.json()}")
+                            return False
+                    else:
+                        st.error(f"无法获取有效的SHA值进行重试")
+                        return False
+                else:
+                    st.error(f"422错误但非SHA问题: {error_info}")
+                    return False
+            except Exception as retry_error:
+                st.error(f"处理422错误时出现异常: {str(retry_error)}")
+                return False
         else:
-            st.error(f"保存到GitHub失败: {response.status_code} - {response.json()}")
+            try:
+                error_detail = response.json()
+                st.error(f"保存到GitHub失败: {response.status_code} - {error_detail}")
+            except:
+                st.error(f"保存到GitHub失败: {response.status_code} - {response.text}")
             return False
         
     except Exception as e:
