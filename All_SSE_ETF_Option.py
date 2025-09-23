@@ -253,30 +253,24 @@ def save_data_to_github():
         data_to_save['ETF类型'] = data_to_save['ETF类型'].map(etf_display_names)
         
         # 从GitHub读取现有数据
-        st.info("🔄 正在读取GitHub上的历史数据...")
         # 获取debug_mode状态，默认为False
         debug_mode = st.session_state.get('debug_mode', False)
         existing_data, sha = read_data_from_github(debug_mode=debug_mode)
         
-        # 详细的数据合并信息
+        # 简化的数据合并信息
         if not existing_data.empty:
-            st.info(f"📊 历史数据: {len(existing_data)}条记录")
-            if '记录日期' in existing_data.columns:
-                st.info(f"📅 历史数据日期范围: {existing_data['记录日期'].min()} 到 {existing_data['记录日期'].max()}")
-                
-                # 检查是否有今日数据需要替换
-                today_records = existing_data[existing_data['记录日期'] == current_date]
-                if not today_records.empty:
-                    st.info(f"🔄 发现今日已有 {len(today_records)} 条记录，将替换为最新数据")
-                    existing_data = existing_data[existing_data['记录日期'] != current_date]
+            # 检查是否有今日数据需要替换
+            today_records = existing_data[existing_data['记录日期'] == current_date] if '记录日期' in existing_data.columns else pd.DataFrame()
+            if not today_records.empty:
+                existing_data = existing_data[existing_data['记录日期'] != current_date]
             
             # 合并数据
             final_data = pd.concat([existing_data, data_to_save], ignore_index=True)
-            st.success(f"✅ 数据合并完成: 历史{len(existing_data)}条 + 新增{len(data_to_save)}条 = 总计{len(final_data)}条")
+            st.success(f"✅ 数据已合并到历史文件，总计 {len(final_data)} 条记录")
         else:
             # 没有现有数据，使用新数据
-            st.info(f"📝 没有历史数据，将创建新文件，包含 {len(data_to_save)} 条记录")
             final_data = data_to_save
+            st.info(f"📝 创建新的数据文件，包含 {len(data_to_save)} 条记录")
         
         # 按日期排序
         final_data = final_data.sort_values('记录日期', ascending=False)
@@ -296,9 +290,6 @@ def save_data_to_github():
         # 如果文件已存在且有SHA值，添加sha（用于更新现有文件）
         if sha:
             payload["sha"] = sha
-            st.info(f"正在更新现有文件，SHA: {sha[:8]}...")
-        else:
-            st.info("正在创建新文件...")
         
         # 如果没有SHA但尝试更新文件时失败，尝试重新获取SHA
         if not sha:
@@ -312,9 +303,8 @@ def save_data_to_github():
                     sha = file_info_check.get('sha')
                     if sha:
                         payload["sha"] = sha
-                        st.info(f"重新获取到文件SHA: {sha[:8]}，正在更新文件...")
             except Exception as sha_retry_error:
-                st.warning(f"重新获取SHA时出错: {str(sha_retry_error)}，将尝试创建新文件")
+                pass  # 静默处理SHA重试错误
         
         # 提交到GitHub
         url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
@@ -329,8 +319,6 @@ def save_data_to_github():
             try:
                 error_info = response.json()
                 if "sha" in str(error_info).lower():
-                    st.warning("⚠️ SHA冲突，正在尝试重新获取最新文件状态...")
-                    
                     # 强制重新获取最新的文件状态
                     time.sleep(1)  # 短暂等待
                     fresh_data, fresh_sha = read_data_from_github()
@@ -338,23 +326,22 @@ def save_data_to_github():
                     if fresh_sha and fresh_sha != sha:
                         # 使用最新的SHA重新尝试
                         payload["sha"] = fresh_sha
-                        st.info(f"使用最新SHA重新提交: {fresh_sha[:8]}...")
                         
                         response_retry = requests.put(url, json=payload, headers=headers)
                         if response_retry.status_code in [200, 201]:
-                            st.success(f"✅ 重试成功！数据已保存到GitHub仓库，共 {len(data_to_save)} 条记录")
+                            st.success(f"✅ 数据已保存到GitHub仓库，共 {len(data_to_save)} 条记录")
                             return True
                         else:
-                            st.error(f"重试后仍然失败: {response_retry.status_code} - {response_retry.json()}")
+                            st.error(f"保存失败: {response_retry.status_code}")
                             return False
                     else:
-                        st.error(f"无法获取有效的SHA值进行重试")
+                        st.error("无法获取有效的SHA值进行重试")
                         return False
                 else:
-                    st.error(f"422错误但非SHA问题: {error_info}")
+                    st.error(f"保存失败: 422错误")
                     return False
             except Exception as retry_error:
-                st.error(f"处理422错误时出现异常: {str(retry_error)}")
+                st.error(f"保存过程中出现异常: {str(retry_error)}")
                 return False
         else:
             try:
@@ -473,7 +460,7 @@ with col2:
 with col3:
     auto_refresh = st.checkbox("启用自动刷新(每5分钟，仅交易时间9:30-15:15)", value=True)
 with col4:
-    debug_mode = st.checkbox("🐛 调试模式", value=True, help="显示详细的数据处理信息")
+    debug_mode = st.checkbox("🐛 调试模式", value=False, help="显示详细的数据处理信息")
     # 将debug_mode状态存储到session_state
     st.session_state['debug_mode'] = debug_mode
 
