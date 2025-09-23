@@ -28,7 +28,7 @@ if 'latest_premium_data' not in st.session_state:
     st.session_state.latest_premium_data = None
 
 # 从GitHub读取数据的函数
-def read_data_from_github():
+def read_data_from_github(debug_mode=False):
     """从GitHub仓库读取CSV数据"""
     try:
         url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
@@ -40,16 +40,68 @@ def read_data_from_github():
             file_info = response.json()
             content = base64.b64decode(file_info['content']).decode('utf-8-sig')
             
+            # 添加详细的调试信息
+            content_length = len(content) if content else 0
+            content_preview = content[:200] if content else "无内容"
+            
+            if debug_mode:
+                st.info(f"📁 成功读取GitHub文件，内容长度: {content_length} 字符")
+            
+            # 检查内容是否为空或只包含空白字符
+            if not content or content.strip() == "":
+                if debug_mode:
+                    st.warning("⚠️ GitHub上的文件完全为空，将创建新的数据文件")
+                return pd.DataFrame(), file_info['sha']
+            
             # 从字符串创建DataFrame
             from io import StringIO
-            df = pd.read_csv(StringIO(content))
-            return df, file_info['sha']
-        else:
+            try:
+                df = pd.read_csv(StringIO(content))
+                
+                # 添加详细的数据信息
+                if debug_mode:
+                    st.info(f"📊 成功解析CSV数据: {len(df)}行 x {len(df.columns)}列")
+                    if len(df.columns) > 0:
+                        st.info(f"📋 列名: {list(df.columns)}")
+                
+                # 只有在真正没有数据时才返回空DataFrame
+                if df.empty and len(df.columns) == 0:
+                    if debug_mode:
+                        st.warning("⚠️ CSV文件解析后没有任何列，将创建新的数据文件")
+                    return pd.DataFrame(), file_info['sha']
+                elif df.empty:
+                    if debug_mode:
+                        st.info("📝 CSV文件有列名但没有数据行，这是正常的，将追加新数据")
+                    return df, file_info['sha']  # 返回有列名的空DataFrame
+                else:
+                    if debug_mode:
+                        st.success(f"✅ 成功读取历史数据: {len(df)}条记录")
+                    else:
+                        st.info(f"📁 读取到历史数据: {len(df)}条记录")
+                    return df, file_info['sha']
+                    
+            except pd.errors.EmptyDataError:
+                if debug_mode:
+                    st.warning("⚠️ CSV文件完全为空（无列名无数据），将创建新的数据文件")
+                return pd.DataFrame(), file_info['sha']
+            except Exception as parse_error:
+                st.error(f"❌ 解析CSV文件时出错: {str(parse_error)}")
+                if debug_mode:
+                    st.error(f"文件内容预览: {content_preview}")
+                st.warning("将尝试创建新的数据文件")
+                return pd.DataFrame(), file_info['sha']
+                
+        elif response.status_code == 404:
             # 文件不存在，返回空的DataFrame
+            st.info("📂 GitHub上的文件不存在，将创建新的数据文件")
+            return pd.DataFrame(), None
+        else:
+            # 其他错误
+            st.error(f"❌ 访问GitHub文件失败: {response.status_code} - {response.text}")
             return pd.DataFrame(), None
             
     except Exception as e:
-        st.error(f"从GitHub读取数据时出错: {str(e)}")
+        st.error(f"❌ 从GitHub读取数据时出错: {str(e)}")
         return pd.DataFrame(), None
 
 # 保存数据到GitHub的函数
@@ -94,15 +146,29 @@ def save_data_to_github():
         data_to_save['ETF类型'] = data_to_save['ETF类型'].map(etf_display_names)
         
         # 从GitHub读取现有数据
-        existing_data, sha = read_data_from_github()
+        st.info("🔄 正在读取GitHub上的历史数据...")
+        # 获取debug_mode状态，默认为False
+        debug_mode = st.session_state.get('debug_mode', False)
+        existing_data, sha = read_data_from_github(debug_mode=debug_mode)
         
+        # 详细的数据合并信息
         if not existing_data.empty:
-            # 删除同日期的记录
-            existing_data = existing_data[existing_data['记录日期'] != current_date]
+            st.info(f"📊 历史数据: {len(existing_data)}条记录")
+            if '记录日期' in existing_data.columns:
+                st.info(f"📅 历史数据日期范围: {existing_data['记录日期'].min()} 到 {existing_data['记录日期'].max()}")
+                
+                # 检查是否有今日数据需要替换
+                today_records = existing_data[existing_data['记录日期'] == current_date]
+                if not today_records.empty:
+                    st.info(f"🔄 发现今日已有 {len(today_records)} 条记录，将替换为最新数据")
+                    existing_data = existing_data[existing_data['记录日期'] != current_date]
+            
             # 合并数据
             final_data = pd.concat([existing_data, data_to_save], ignore_index=True)
+            st.success(f"✅ 数据合并完成: 历史{len(existing_data)}条 + 新增{len(data_to_save)}条 = 总计{len(final_data)}条")
         else:
             # 没有现有数据，使用新数据
+            st.info(f"📝 没有历史数据，将创建新文件，包含 {len(data_to_save)} 条记录")
             final_data = data_to_save
         
         # 按日期排序
@@ -120,9 +186,28 @@ def save_data_to_github():
             "content": encoded_content
         }
         
-        # 如果文件已存在，添加sha
+        # 如果文件已存在且有SHA值，添加sha（用于更新现有文件）
         if sha:
             payload["sha"] = sha
+            st.info(f"正在更新现有文件，SHA: {sha[:8]}...")
+        else:
+            st.info("正在创建新文件...")
+        
+        # 如果没有SHA但尝试更新文件时失败，尝试重新获取SHA
+        if not sha:
+            # 再次尝试获取文件信息，防止并发操作导致的问题
+            try:
+                url_check = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+                headers_check = {"Authorization": f"token {GITHUB_TOKEN}"}
+                response_check = requests.get(url_check, headers=headers_check)
+                if response_check.status_code == 200:
+                    file_info_check = response_check.json()
+                    sha = file_info_check.get('sha')
+                    if sha:
+                        payload["sha"] = sha
+                        st.info(f"重新获取到文件SHA: {sha[:8]}，正在更新文件...")
+            except Exception as sha_retry_error:
+                st.warning(f"重新获取SHA时出错: {str(sha_retry_error)}，将尝试创建新文件")
         
         # 提交到GitHub
         url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
@@ -132,8 +217,44 @@ def save_data_to_github():
         if response.status_code in [200, 201]:
             st.success(f"✅ 数据已保存到GitHub仓库，共 {len(data_to_save)} 条记录")
             return True
+        elif response.status_code == 422:
+            # 422错误通常是SHA问题，尝试强制刷新
+            try:
+                error_info = response.json()
+                if "sha" in str(error_info).lower():
+                    st.warning("⚠️ SHA冲突，正在尝试重新获取最新文件状态...")
+                    
+                    # 强制重新获取最新的文件状态
+                    time.sleep(1)  # 短暂等待
+                    fresh_data, fresh_sha = read_data_from_github()
+                    
+                    if fresh_sha and fresh_sha != sha:
+                        # 使用最新的SHA重新尝试
+                        payload["sha"] = fresh_sha
+                        st.info(f"使用最新SHA重新提交: {fresh_sha[:8]}...")
+                        
+                        response_retry = requests.put(url, json=payload, headers=headers)
+                        if response_retry.status_code in [200, 201]:
+                            st.success(f"✅ 重试成功！数据已保存到GitHub仓库，共 {len(data_to_save)} 条记录")
+                            return True
+                        else:
+                            st.error(f"重试后仍然失败: {response_retry.status_code} - {response_retry.json()}")
+                            return False
+                    else:
+                        st.error(f"无法获取有效的SHA值进行重试")
+                        return False
+                else:
+                    st.error(f"422错误但非SHA问题: {error_info}")
+                    return False
+            except Exception as retry_error:
+                st.error(f"处理422错误时出现异常: {str(retry_error)}")
+                return False
         else:
-            st.error(f"保存到GitHub失败: {response.status_code} - {response.json()}")
+            try:
+                error_detail = response.json()
+                st.error(f"保存到GitHub失败: {response.status_code} - {error_detail}")
+            except:
+                st.error(f"保存到GitHub失败: {response.status_code} - {response.text}")
             return False
         
     except Exception as e:
@@ -237,13 +358,17 @@ current_contract_months = get_contract_months()
 st.info(f"📅 当前使用的合约月份: {', '.join(current_contract_months)} (根据第4个星期三规则自动计算)")
 
 # 顶部控制栏 - 包含保存按钮和刷新控制
-col1, col2, col3 = st.columns([1.5, 2, 2.5])
+col1, col2, col3, col4 = st.columns([1.5, 2, 2.5, 1])
 with col1:
     save_button = st.button("💾 保存当前数据到GitHub", help="将当前数据保存到GitHub仓库")
 with col2:
     refresh_button = st.button("🔄 手动刷新数据")
 with col3:
     auto_refresh = st.checkbox("启用自动刷新(每5分钟，仅交易时间9:30-15:15)", value=True)
+with col4:
+    debug_mode = st.checkbox("🐛 调试模式", value=True, help="显示详细的数据处理信息")
+    # 将debug_mode状态存储到session_state
+    st.session_state['debug_mode'] = debug_mode
 
 # 上次更新时间显示
 last_update = st.empty()
