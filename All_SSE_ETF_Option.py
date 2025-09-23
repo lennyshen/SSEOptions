@@ -38,14 +38,121 @@ def read_data_from_github(debug_mode=False):
         if response.status_code == 200:
             # 文件存在，获取内容
             file_info = response.json()
-            content = base64.b64decode(file_info['content']).decode('utf-8-sig')
+            
+            # 添加详细的调试信息 - 检查原始响应
+            if debug_mode:
+                st.info(f"📡 GitHub API响应状态: {response.status_code}")
+                st.info(f"📄 文件信息键: {list(file_info.keys())}")
+                if 'size' in file_info:
+                    st.info(f"📏 GitHub文件大小: {file_info['size']} 字节")
+                if 'content' in file_info:
+                    raw_content = file_info['content']
+                    st.info(f"📦 Base64内容长度: {len(raw_content)} 字符")
+                    st.info(f"📝 Base64内容预览: {raw_content[:100]}...")
+            
+            # 优先尝试使用download_url获取内容（更可靠）
+            if 'download_url' in file_info and file_info['download_url']:
+                if debug_mode:
+                    st.info(f"🔗 优先使用下载URL获取内容: {file_info['download_url']}")
+                try:
+                    download_response = requests.get(file_info['download_url'])
+                    if download_response.status_code == 200:
+                        content = download_response.text
+                        if debug_mode:
+                            st.success(f"✅ 通过下载URL成功获取内容，长度: {len(content)} 字符")
+                            st.info(f"📖 内容预览: {content[:200]}")
+                        else:
+                            st.info(f"📁 通过下载URL读取文件，内容长度: {len(content)} 字符")
+                        
+                        # 直接处理获取的内容，跳过Base64解码
+                        if not content or content.strip() == "":
+                            if debug_mode:
+                                st.warning("⚠️ 下载的文件内容为空")
+                            return pd.DataFrame(), file_info.get('sha')
+                        
+                        # 解析CSV
+                        from io import StringIO
+                        try:
+                            df = pd.read_csv(StringIO(content))
+                            if debug_mode:
+                                st.info(f"📊 CSV解析成功: {len(df)}行 x {len(df.columns)}列")
+                                if len(df.columns) > 0:
+                                    st.info(f"📋 列名: {list(df.columns)}")
+                            
+                            if df.empty and len(df.columns) == 0:
+                                if debug_mode:
+                                    st.warning("⚠️ CSV文件解析后没有任何列")
+                                return pd.DataFrame(), file_info.get('sha')
+                            else:
+                                if not debug_mode and not df.empty:
+                                    st.info(f"📁 读取到历史数据: {len(df)}条记录")
+                                return df, file_info.get('sha')
+                                
+                        except Exception as csv_error:
+                            st.error(f"❌ CSV解析失败: {str(csv_error)}")
+                            if debug_mode:
+                                st.error(f"内容预览: {content[:200]}")
+                            return pd.DataFrame(), file_info.get('sha')
+                            
+                except Exception as download_error:
+                    st.warning(f"⚠️ 下载URL获取失败: {str(download_error)}")
+                    if debug_mode:
+                        st.info("💡 回退到Base64解码方式")
+            
+            # 如果download_url失败或不存在，尝试Base64解码
+            if 'content' not in file_info:
+                st.error("❌ GitHub API响应中没有'content'字段且无法通过下载URL获取")
+                return pd.DataFrame(), file_info.get('sha')
+            
+            # 尝试解码内容
+            try:
+                raw_content = file_info['content']
+                # 移除可能的换行符和空格
+                raw_content = raw_content.replace('\n', '').replace('\r', '').replace(' ', '')
+                
+                if debug_mode:
+                    st.info(f"🧹 清理后Base64长度: {len(raw_content)} 字符")
+                
+                # 尝试Base64解码
+                decoded_bytes = base64.b64decode(raw_content)
+                
+                if debug_mode:
+                    st.info(f"🔓 解码后字节长度: {len(decoded_bytes)} 字节")
+                
+                # 尝试多种编码方式解码
+                content = None
+                encodings = ['utf-8-sig', 'utf-8', 'gbk', 'gb2312', 'latin1']
+                
+                for encoding in encodings:
+                    try:
+                        content = decoded_bytes.decode(encoding)
+                        if debug_mode:
+                            st.info(f"✅ 使用 {encoding} 编码成功解码")
+                        break
+                    except UnicodeDecodeError:
+                        if debug_mode:
+                            st.warning(f"⚠️ {encoding} 编码解码失败，尝试下一个")
+                        continue
+                
+                if content is None:
+                    st.error("❌ 所有编码方式都无法解码文件内容")
+                    return pd.DataFrame(), file_info.get('sha')
+                    
+            except Exception as decode_error:
+                st.error(f"❌ Base64解码失败: {str(decode_error)}")
+                if debug_mode:
+                    st.error(f"原始content前100字符: {file_info.get('content', '')[:100]}")
+                return pd.DataFrame(), file_info.get('sha')
             
             # 添加详细的调试信息
             content_length = len(content) if content else 0
             content_preview = content[:200] if content else "无内容"
             
             if debug_mode:
-                st.info(f"📁 成功读取GitHub文件，内容长度: {content_length} 字符")
+                st.info(f"📁 最终解码内容长度: {content_length} 字符")
+                st.info(f"📖 内容预览: {content_preview}")
+            else:
+                st.info(f"📁 读取GitHub文件，内容长度: {content_length} 字符")
             
             # 检查内容是否为空或只包含空白字符
             if not content or content.strip() == "":
