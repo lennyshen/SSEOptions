@@ -452,14 +452,16 @@ current_contract_months = get_contract_months()
 st.info(f"📅 当前使用的合约月份: {', '.join(current_contract_months)} (根据第4个星期三规则自动计算)")
 
 # 顶部控制栏 - 包含保存按钮和刷新控制
-col1, col2, col3, col4 = st.columns([1.5, 2, 2.5, 1])
+col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 2, 2.5, 1])
 with col1:
     save_button = st.button("💾 保存当前数据到GitHub", help="将当前数据保存到GitHub仓库")
 with col2:
     refresh_button = st.button("🔄 手动刷新数据")
 with col3:
-    auto_refresh = st.checkbox("启用自动刷新(每5分钟，仅交易时间9:30-15:15)", value=True)
+    refresh_and_save_button = st.button("🔄💾 刷新并保存", help="先刷新数据，然后自动保存到GitHub")
 with col4:
+    auto_refresh = st.checkbox("启用自动刷新(每5分钟，仅交易时间9:30-15:15)", value=True)
+with col5:
     debug_mode = st.checkbox("🐛 调试模式", value=False, help="显示详细的数据处理信息")
     # 将debug_mode状态存储到session_state
     st.session_state['debug_mode'] = debug_mode
@@ -995,6 +997,16 @@ def get_and_display_data():
 if save_button:
     save_data_to_github()
 
+# 处理"刷新并保存"按钮点击 - 设置标记
+if refresh_and_save_button:
+    st.session_state.last_refresh_time = time.time()
+    st.session_state.manual_refresh_triggered = True
+    st.session_state.refresh_and_save_triggered = True  # 设置刷新后保存的标记
+    # 清除缓存以强制重新获取数据
+    get_option_code_mapping.clear()
+    get_basic_option_data.clear()
+    st.rerun()
+
 # 主要的数据显示逻辑
 # 初始化会话状态
 if 'last_refresh_time' not in st.session_state:
@@ -1056,17 +1068,28 @@ if auto_refresh and time_since_refresh >= 300 and is_trading:
 if manual_refresh:
     st.session_state.manual_refresh_triggered = False
 
+# 检查是否是"刷新并保存"操作
+refresh_and_save = st.session_state.get('refresh_and_save_triggered', False)
+
 # 显示数据 - 手动刷新任何时候都可以，自动刷新只在交易时间
-should_get_data = manual_refresh or (auto_refresh and is_trading) or not auto_refresh
+should_get_data = manual_refresh or refresh_and_save or (auto_refresh and is_trading) or not auto_refresh
 
 if should_get_data:
-    if manual_refresh:
+    if refresh_and_save:
+        st.info("🔄💾 刷新并保存操作触发，正在获取数据...")
+    elif manual_refresh:
         st.info("🔄 手动刷新触发，正在获取数据")
     elif auto_refresh and is_trading:
         st.info("✅ 交易时间内，正在获取实时数据")
     elif not auto_refresh:
         st.info("📱 自动刷新已关闭，正在获取数据")
     get_and_display_data()
+    
+    # 如果是"刷新并保存"操作，在数据获取完成后自动保存
+    if refresh_and_save:
+        st.info("💾 数据刷新完成，正在自动保存到GitHub...")
+        save_data_to_github()
+        st.session_state.refresh_and_save_triggered = False  # 清除标记
 else:
     # 这种情况下是：启用了自动刷新但不在交易时间，且没有手动刷新
     st.info("📅 当前不在交易时间（工作日9:30-15:15，北京时间），自动刷新已暂停")
